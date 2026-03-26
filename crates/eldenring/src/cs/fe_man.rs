@@ -119,7 +119,9 @@ pub struct BossHealthDisplayEntry {
     pub field_ins_handle: FieldInsHandle,
     pub damage_taken: i32,
     unk14: u32,
-    unk18: [u8; 0x8],
+    pub is_hit: bool,
+    unk19: [u8; 3],
+    pub display_time: f32,
 }
 
 #[repr(C)]
