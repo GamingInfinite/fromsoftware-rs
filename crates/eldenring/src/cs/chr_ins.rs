@@ -208,7 +208,7 @@ pub struct ChrIns {
     /// Same as [Self::npc_id]
     pub character_id: u32,
     unk18c: u32,
-    pub module_container: OwnedPtr<ChrInsModuleContainer>,
+    pub modules: OwnedPtr<ChrInsModuleContainer>,
     unk198: usize,
     /// Squared distance at which the character will be deactivated.
     pub squared_deactivation_distance: f32,
@@ -219,7 +219,7 @@ pub struct ChrIns {
     /// Optional squared override for the fade-out start distance.  <0 means no override.
     pub squared_fade_out_start_distance_override: f32,
     unk1b0: f32,
-    unk1b4: f32,
+    pub load_state: ChrLoadState,
     unk1b8: f32,
     unk1bc: f32,
     unk1c0: u32,
@@ -387,6 +387,33 @@ pub impl ChrInsExt for Subclass<ChrIns> {
                 .saturating_add(character_type as u32) as i32
         }
     }
+}
+
+bitfield! {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct ChrLoadState(u32);
+    impl Debug;
+
+    /// Source of name: debug string "描画グループ"
+    pub draw_group_enabled, set_draw_group_enabled: 0;
+    /// Source of name: debug string "ヒット不安定"
+    pub unstable_hits, set_unstable_hits: 1;
+    /// Source of name: debug string "距離"
+    pub distance, set_distance: 2;
+    /// Source of name: debug string "バックリード無効"
+    pub backread_disabled, set_backread_disabled: 4;
+    /// Source of name: debug string "巡回リーダー無効"
+    pub patrol_leader_disabled, set_patrol_leader_disabled: 5;
+    /// Source of name: debug string "天候・時間帯"
+    pub weather_and_time_of_day, set_weather_and_time_of_day: 6;
+    /// Source of name: debug string "消滅死亡"
+    pub extinction_death, set_extinction_death: 7;
+    /// Source of name: debug string "PC近く"
+    pub near_pc, set_near_pc: 8;
+    /// Source of name: debug string "評価値足切り"
+    pub evaluation_value_cutoff, set_evaluation_value_cutoff: 9;
+    /// Source of name: debug string "評価値足切り"
+    pub host_inactive, set_host_inactive: 10;
 }
 
 bitfield! {
@@ -911,16 +938,34 @@ pub struct PlayerIns {
 }
 
 impl PlayerIns {
-    /// Gets the local player if held by [`WorldChrMan`]
+    /// Gets the local player if held by [`WorldChrMan`].
     ///
     /// ## Safety
     ///
-    /// The caller must ensure that no references to [`WorldChrMan`] are
-    /// held at the time of calling as this method mutably borrows [`WorldChrMan`]
-    /// to reach `main_player`.
-    pub unsafe fn local_player() -> InstanceResult<&'static mut Self> {
+    /// The caller must ensure that no mutable references to [`WorldChrMan`]
+    /// exist. This means that this should only be called on the main thread.
+    pub unsafe fn local_player() -> InstanceResult<&'static Self> {
         unsafe {
             let Ok(world_chr_man) = WorldChrMan::instance() else {
+                return Err(InstanceError::NotFound(Cow::Borrowed("PlayerIns")));
+            };
+
+            world_chr_man
+                .main_player
+                .as_deref()
+                .ok_or(InstanceError::NotFound(Cow::Borrowed("PlayerIns")))
+        }
+    }
+
+    /// Gets the mutable local player if held by [`WorldChrMan`].
+    ///
+    /// ## Safety
+    ///
+    /// The caller must ensure that no references to [`WorldChrMan`] exist. This
+    /// means that this should only be called on the main thread.
+    pub unsafe fn local_player_mut() -> InstanceResult<&'static mut Self> {
+        unsafe {
+            let Ok(world_chr_man) = WorldChrMan::instance_mut() else {
                 return Err(InstanceError::NotFound(Cow::Borrowed("PlayerIns")));
             };
 
