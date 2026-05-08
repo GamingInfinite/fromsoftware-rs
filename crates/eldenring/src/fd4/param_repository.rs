@@ -38,7 +38,7 @@ use super::{FD4ResCap, FD4ResRep};
 pub struct FD4ParamRepository {
     /// Resource repository holding the actual param data.
     pub res_rep: FD4ResRep,
-    res_cap_holder: FD4ResCapHolder<FD4ParamResCap>,
+    pub res_cap_holder: FD4ResCapHolder<FD4ParamResCap>,
     allocator: usize,
 }
 
