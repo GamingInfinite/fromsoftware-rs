@@ -4,10 +4,8 @@ use hudhook::imgui::{TableColumnSetup, Ui};
 
 use debug::UiExt;
 use eldenring::cs::{
-    CSChrBehaviorDataModule, CSChrLadderModule, CSChrModelParamModifierModule, CSChrPhysicsModule,
-    CSChrRideModule, CSChrTimeActModule, CSPairAnimNode, CSRideNode, ChrAsm, ChrAsmEquipEntries,
-    ChrAsmEquipment, ChrAsmSlot, ChrIns, ChrInsExt, ChrInsModuleContainer, ChrInsSubclassMut,
-    ChrPhysicsMaterialInfo, EquipGameData, EquipInventoryData, EquipItemData, EquipMagicData,
+    ChrAsm, ChrAsmEquipEntries, ChrAsmEquipment, ChrAsmSlot, ChrIns, ChrInsExt, ChrInsSubclassMut,
+    EquipGameData, EquipInventoryData, EquipItemData, EquipMagicData, InventoryItemsData,
     ItemReplenishStateTracker, PlayerDataAttackRating, PlayerGameData, PlayerIns,
 };
 use fromsoftware_shared::NonEmptyIteratorExt;
@@ -514,22 +512,33 @@ impl DebugDisplay for EquipItemData {
 
 impl DebugDisplay for EquipInventoryData {
     fn render_debug(&self, ui: &Ui) {
+        ui.nested("InventoryItemsData", &self.items_data);
         ui.display("Total item entry count", self.total_item_entry_count);
+        ui.display("Next sort ID", self.next_sort_id);
+        ui.display("Unlimited Consumables", self.unlimited_consumables);
+        ui.display("Limited Consumables", self.limited_pots);
 
-        let normal_items = self
-            .items_data
-            .normal_entries()
-            .iter()
-            .non_empty()
-            .collect::<Vec<_>>();
+        ui.list(
+            "Recent Items Indecies",
+            self.recent_item_indices.iter(),
+            |ui, i, item| {
+                ui.text(format!("{}: {:?}", i, item));
+            },
+        );
+    }
+}
+
+impl DebugDisplay for InventoryItemsData {
+    fn render_debug(&self, ui: &Ui) {
+        let normal_items = self.normal_entries().iter().non_empty().collect::<Vec<_>>();
         let label = format!(
             "Normal Items ({}/{})",
             normal_items.len(),
-            self.items_data.normal_items_capacity
+            self.normal_items_capacity
         );
         ui.header(&label, || {
             ui.table(
-                "equip-inventory-data-normal-items",
+                "inventory-items-data-normal-items",
                 [
                     TableColumnSetup::new("Index"),
                     TableColumnSetup::new("Gaitem Handle"),
@@ -561,20 +570,13 @@ impl DebugDisplay for EquipInventoryData {
             );
         });
 
-        let key_items = self
-            .items_data
-            .key_entries()
-            .iter()
-            .non_empty()
-            .collect::<Vec<_>>();
         let label = format!(
             "Key Items ({}/{})",
-            key_items.len(),
-            self.items_data.key_items_capacity
+            self.key_items_len, self.key_items_capacity
         );
         ui.header(&label, || {
             ui.table(
-                "equip-inventory-data-key-items",
+                "inventory-items-data-key-items",
                 [
                     TableColumnSetup::new("Index"),
                     TableColumnSetup::new("Gaitem Handle"),
@@ -583,7 +585,7 @@ impl DebugDisplay for EquipInventoryData {
                     TableColumnSetup::new("Display ID"),
                     TableColumnSetup::new("Is New"),
                 ],
-                key_items.iter(),
+                self.key_entries().iter().non_empty(),
                 |ui, index, item| {
                     ui.table_next_column();
                     ui.text(index.to_string());
@@ -606,20 +608,13 @@ impl DebugDisplay for EquipInventoryData {
             );
         });
 
-        let multiplay_key_items = self
-            .items_data
-            .multiplay_key_entries()
-            .iter()
-            .non_empty()
-            .collect::<Vec<_>>();
         let label = format!(
             "Multiplay Key Items ({}/{})",
-            multiplay_key_items.len(),
-            self.items_data.multiplay_key_items_capacity
+            self.multiplay_key_items_len, self.multiplay_key_items_capacity
         );
         ui.header(&label, || {
             ui.table(
-                "equip-inventory-data-multiplay-key-items",
+                "inventory-items-data-multiplay-key-items",
                 [
                     TableColumnSetup::new("Index"),
                     TableColumnSetup::new("Gaitem Handle"),
@@ -627,7 +622,7 @@ impl DebugDisplay for EquipInventoryData {
                     TableColumnSetup::new("Quantity"),
                     TableColumnSetup::new("Display ID"),
                 ],
-                multiplay_key_items.iter(),
+                self.multiplay_key_entries().iter().non_empty(),
                 |ui, index, item| {
                     ui.table_next_column();
                     ui.text(index.to_string());
@@ -646,6 +641,42 @@ impl DebugDisplay for EquipInventoryData {
                 },
             );
         });
+        ui.header("Item ID Map", || {
+            ui.table(
+                "inventory-items-data-item-map",
+                [
+                    TableColumnSetup::new("Index"),
+                    TableColumnSetup::new("Is Free"),
+                    TableColumnSetup::new("Item Id"),
+                    TableColumnSetup::new("Item Slot"),
+                    TableColumnSetup::new("Next Index"),
+                ],
+                unsafe { self.item_id_mapping.as_slice() },
+                |ui, index, item| {
+                    ui.table_next_column();
+                    ui.text(index.to_string());
+
+                    ui.table_next_column();
+                    ui.text(format!("{:?}", item.is_free()));
+
+                    ui.table_next_column();
+                    ui.text(format!("{:?}", item.item_id));
+
+                    ui.table_next_column();
+                    ui.text(item.item_slot().to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.next_mapping_item().to_string());
+                },
+            );
+        });
+        ui.list(
+            "Item ID Indices",
+            self.item_id_mapping_indices.iter(),
+            |ui, i, item| {
+                ui.text(format!("{}: {:?}", i, item));
+            },
+        );
     }
 }
 
@@ -731,190 +762,4 @@ fn chr_ins_common_debug(chr_ins: &mut ChrIns, ui: &Ui, state: &mut ChrInsState) 
     });
 
     ui.nested("Modules", &chr_ins.modules);
-}
-
-impl DebugDisplay for ChrInsModuleContainer {
-    fn render_debug(&self, ui: &Ui) {
-        ui.nested("Physics", &self.physics);
-        ui.nested("Behavior Data", &self.behavior_data);
-        ui.nested("Model param modifier", &self.model_param_modifier);
-        ui.nested("Ladder", &self.ladder);
-        ui.nested("Time Act", &self.time_act);
-        ui.nested("Ride", &self.ride);
-    }
-}
-
-impl DebugDisplay for CSChrLadderModule {
-    fn render_debug(&self, ui: &Ui) {
-        ui.text(format!("Ladder handle: {:?}", self.ladder_handle));
-        ui.text(format!("State: {:?}", self.state));
-        ui.text(format!("Top: {:?}", self.top));
-        ui.text(format!("Bottom: {:?}", self.bottom));
-    }
-}
-
-impl DebugDisplay for CSChrPhysicsModule {
-    fn render_debug(&self, ui: &Ui) {
-        ui.display("Position", self.position);
-        ui.display("Orientation", self.orientation);
-        ui.nested("Physics material", unsafe {
-            self.slide_info.material_info.as_ref()
-        });
-    }
-}
-
-impl DebugDisplay for CSChrBehaviorDataModule {
-    fn render_debug(&self, ui: &Ui) {
-        ui.display("Has twist modifier", self.has_twist_modifier);
-        ui.display("Fixed rotation direction", self.fixed_rotation_direction);
-        ui.display("Min twist rank", self.min_twist_rank);
-        ui.display("HKS root motion multiplier", self.hks_root_motion_mult);
-        ui.display("Turn speed", self.turn_speed);
-        ui.display(
-            "HKS animation speed multiplier",
-            self.hks_animation_speed_multiplier,
-        );
-
-        ui.header("Twist modifiers", || {
-            ui.table(
-                "behavior-data-twist-modifiers",
-                [
-                    TableColumnSetup::new("ID"),
-                    TableColumnSetup::new("Target"),
-                    TableColumnSetup::new("Rank"),
-                    TableColumnSetup::new("Limits (U/D/L/R)"),
-                    TableColumnSetup::new("Minimums (U/D/L/R)"),
-                ],
-                self.twist_modifiers.iter(),
-                |ui, _i, modifier| {
-                    ui.table_next_column();
-                    ui.text(modifier.modifier_id.to_string());
-
-                    ui.table_next_column();
-                    ui.text(modifier.target_type.to_string());
-
-                    ui.table_next_column();
-                    ui.text(modifier.rank.to_string());
-
-                    ui.table_next_column();
-                    ui.text(format!(
-                        "{:.2}/{:.2}/{:.2}/{:.2}",
-                        modifier.up_limit_angle,
-                        modifier.down_limit_angle,
-                        modifier.left_limit_angle,
-                        modifier.right_limit_angle
-                    ));
-
-                    ui.table_next_column();
-                    ui.text(format!(
-                        "{:.2}/{:.2}/{:.2}/{:.2}",
-                        modifier.up_minimum_angle,
-                        modifier.down_minimum_angle,
-                        modifier.left_minimum_angle,
-                        modifier.right_minimum_angle
-                    ));
-                },
-            );
-        });
-    }
-}
-
-impl DebugDisplay for ChrPhysicsMaterialInfo {
-    fn render_debug(&self, ui: &Ui) {
-        ui.debug("Ground normal vector", self.normal_vector);
-    }
-}
-
-impl DebugDisplay for CSChrModelParamModifierModule {
-    fn render_debug(&self, ui: &Ui) {
-        ui.table(
-            "chr-ins-model-param-modifier",
-            [TableColumnSetup::new("Name")],
-            self.modifiers.items().iter(),
-            |ui, _i, modifier| {
-                ui.table_next_column();
-                ui.text(unsafe { modifier.name.to_string() }.unwrap());
-            },
-        );
-    }
-}
-
-impl DebugDisplay for CSChrTimeActModule {
-    fn render_debug(&self, ui: &Ui) {
-        ui.table(
-            "chr-ins-time-act-module",
-            [
-                TableColumnSetup::new("Index"),
-                TableColumnSetup::new("Anim ID"),
-                TableColumnSetup::new("Play Time"),
-                TableColumnSetup::new("Length"),
-            ],
-            self.anim_queue.iter(),
-            |ui, index, entry| {
-                ui.table_next_column();
-                ui.text(index.to_string());
-
-                ui.table_next_column();
-                ui.text(entry.anim_id.to_string());
-
-                ui.table_next_column();
-                ui.text(entry.play_time.to_string());
-
-                ui.table_next_column();
-                ui.text(entry.anim_length.to_string());
-            },
-        );
-        ui.display("Read IDX", self.read_idx);
-        ui.display("Write IDX", self.write_idx);
-        ui.header("Current Anim Info", || {
-            let current_anim_info = &self.anim_queue[self.read_idx as usize];
-            ui.display("Anim ID", current_anim_info.anim_id);
-            ui.display("Play Time", current_anim_info.play_time);
-            ui.display("Anim Length", current_anim_info.anim_length);
-        });
-    }
-}
-
-impl DebugDisplay for CSChrRideModule {
-    fn render_debug(&self, ui: &Ui) {
-        ui.nested("CSRideNode", &self.ride_node);
-        ui.debug("Last mounted", self.last_mounted);
-        ui.display("Has ride param", self.has_ride_param);
-        ui.display("Is ridden character", self.is_ride_character);
-        ui.display("Mount rotation", self.mount_data.rotation);
-        ui.display("Mount position", self.mount_data.mount_position);
-        ui.display("Mount velocity", self.mount_data.velocity);
-        ui.display("Attack direction", self.mount_data.attack_direction);
-        ui.display(
-            "Attack received damage type",
-            self.mount_data.received_damage_type,
-        );
-        ui.display("Mount health", self.mount_data.mount_health);
-        ui.display("Fall height", self.mount_data.fall_height);
-        ui.display(
-            "Is touching solid ground",
-            self.mount_data.is_touching_solid_ground,
-        );
-        ui.display("Is falling", self.mount_data.is_falling);
-        ui.display("Is sliding", self.mount_data.is_sliding);
-        ui.display("Is mounting", self.is_mounting);
-        ui.display("Is mounted", self.is_mounted);
-    }
-}
-
-impl DebugDisplay for CSPairAnimNode {
-    fn render_debug(&self, ui: &Ui) {
-        ui.display("Counter party", self.counter_party);
-        ui.display("Start position", self.start_position);
-        ui.display("Start rotation", self.start_rotation);
-    }
-}
-
-impl DebugDisplay for CSRideNode {
-    fn render_debug(&self, ui: &Ui) {
-        self.pair_anim_node.render_debug(ui);
-        ui.display("Ride state", self.ride_state);
-        ui.display("Ride param ID", self.ride_param_id);
-        ui.display("Camera mount control", self.camera_mount_control);
-    }
 }

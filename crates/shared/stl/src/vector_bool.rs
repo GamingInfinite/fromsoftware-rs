@@ -16,7 +16,7 @@ const VBITS: usize = VBase::BITS as usize;
 /// [MSVC STL source - `vector<bool>`]: https://github.com/microsoft/STL/blob/main/stl/inc/vector
 /// [Raymond Chen's breakdown of `std::vector<bool>`]: https://devblogs.microsoft.com/oldnewthing/20200313-00/?p=103559
 #[repr(C)]
-pub struct VectorBool<A: Allocator> {
+pub struct VectorBool<A: StlAllocator> {
     #[cfg(any(not(feature = "msvc2012"), feature = "msvc2015"))]
     pub allocator: A,
     first: *mut VBase,
@@ -26,7 +26,7 @@ pub struct VectorBool<A: Allocator> {
     pub allocator: A,
 }
 
-impl<A: Allocator> VectorBool<A> {
+impl<A: StlAllocator> VectorBool<A> {
     /// Creates an empty `vector<bool>` backed by `allocator`.
     ///
     /// Equivalent to `std::vector<bool>()` with a custom allocator
@@ -126,6 +126,16 @@ impl<A: Allocator> VectorBool<A> {
         }
     }
 
+    pub fn clear(&mut self) {
+        if self.capacity() == 0 {
+            return;
+        }
+        unsafe {
+            self.first.write_bytes(0, self.last.div_ceil(VBITS));
+        }
+        self.last = 0;
+    }
+
     /// # Safety
     ///
     /// `index` must be < `self.end`
@@ -146,15 +156,25 @@ impl<A: Allocator> VectorBool<A> {
     }
 
     fn word_parts(&self) -> (&[VBase], VBase) {
+        if self.first.is_null() {
+            return (&[], 0);
+        }
         let full = self.last / VBITS;
         let tail = self.last % VBITS;
         let words = unsafe { std::slice::from_raw_parts(self.first, full) };
-        let mask = ((1 as VBase) << tail).wrapping_sub(1);
-        let tail_word = unsafe { *self.first.add(full) } & mask;
+        let tail_word = if tail > 0 {
+            let mask = ((1 as VBase) << tail).wrapping_sub(1);
+            (unsafe { *self.first.add(full) } & mask)
+        } else {
+            0
+        };
         (words, tail_word)
     }
 
     fn word_parts_mut(&mut self) -> (&mut [VBase], VBase) {
+        if self.first.is_null() {
+            return (&mut [], 0);
+        }
         let full = self.last / VBITS;
         let tail = self.last % VBITS;
         let words = unsafe { std::slice::from_raw_parts_mut(self.first, full) };
@@ -168,10 +188,12 @@ impl<A: Allocator> VectorBool<A> {
         let new_bits = (self.end + self.end / 2).max(VBITS).next_multiple_of(VBITS);
         let new_words = bits_to_words(new_bits);
 
-        let new_ptr = self.allocator.allocate_n::<VBase>(new_words).as_ptr() as _;
+        let new_ptr: *mut VBase = self.allocator.allocate_n::<VBase>(new_words).as_ptr() as _;
         unsafe {
-            std::ptr::copy_nonoverlapping(self.first, new_ptr, old_words);
+            std::ptr::write_bytes(new_ptr.add(old_words), 0, new_words - old_words);
+
             if old_words > 0 {
+                std::ptr::copy_nonoverlapping(self.first, new_ptr, old_words);
                 self.allocator.deallocate_raw(self.first as _);
             }
         }
@@ -180,7 +202,7 @@ impl<A: Allocator> VectorBool<A> {
     }
 }
 
-impl<'a, A: Allocator> IntoIterator for &'a VectorBool<A> {
+impl<'a, A: StlAllocator> IntoIterator for &'a VectorBool<A> {
     type Item = bool;
     type IntoIter = VectorBoolIter<'a, A>;
 
@@ -189,12 +211,12 @@ impl<'a, A: Allocator> IntoIterator for &'a VectorBool<A> {
     }
 }
 
-pub struct VectorBoolIter<'a, A: Allocator> {
+pub struct VectorBoolIter<'a, A: StlAllocator> {
     vec: &'a VectorBool<A>,
     index: usize,
 }
 
-impl<'a, A: Allocator> Iterator for VectorBoolIter<'a, A> {
+impl<'a, A: StlAllocator> Iterator for VectorBoolIter<'a, A> {
     type Item = bool;
 
     #[inline]
@@ -211,14 +233,14 @@ impl<'a, A: Allocator> Iterator for VectorBoolIter<'a, A> {
     }
 }
 
-impl<A: Allocator> ExactSizeIterator for VectorBoolIter<'_, A> {}
+impl<A: StlAllocator> ExactSizeIterator for VectorBoolIter<'_, A> {}
 
 #[inline]
 const fn bits_to_words(bits: usize) -> usize {
     bits.div_ceil(VBITS)
 }
 
-impl<A: Allocator> Drop for VectorBool<A> {
+impl<A: StlAllocator> Drop for VectorBool<A> {
     fn drop(&mut self) {
         if self.end > 0 {
             unsafe { self.allocator.deallocate_raw(self.first as _) };
